@@ -59,23 +59,48 @@ class MLPPolicy(nn.Module):
     def get_action(self, obs: np.ndarray) -> np.ndarray:
         """Takes a single observation (as a numpy array) and returns a single action (as a numpy array)."""
         # TODO: implement get_action
-        action = None
+        if len(obs.shape) > 1:
+            observation = obs
+        else:
+            observation = obs[None]
 
-        return action
+        obs = ptu.from_numpy(observation)
+        
+        with torch.no_grad():
+            ac = self(obs).sample()
+
+        return ptu.to_numpy(ac)
+
+    # def forward(self, obs: torch.FloatTensor):
+    #     """
+    #     This function defines the forward pass of the network.  You can return anything you want, but you should be
+    #     able to differentiate through it. For example, you can return a torch.FloatTensor. You can also return more
+    #     flexible objects, such as a `torch.distributions.Distribution` object. It's up to you!
+    #     """
+    #     if self.discrete:
+    #         # TODO: define the forward pass for a policy with a discrete action space.
+    #         dist = distributions.Categorical(logits=self.logits_net(obs))
+    #     else:
+    #         # TODO: define the forward pass for a policy with a continuous action space.
+    #         dist = distributions.Normal(self.mean_net(obs), torch.exp(self.logstd))
+    #     return dist
 
     def forward(self, obs: torch.FloatTensor):
-        """
-        This function defines the forward pass of the network.  You can return anything you want, but you should be
-        able to differentiate through it. For example, you can return a torch.FloatTensor. You can also return more
-        flexible objects, such as a `torch.distributions.Distribution` object. It's up to you!
-        """
         if self.discrete:
-            # TODO: define the forward pass for a policy with a discrete action space.
-            pass
+            logits = self.logits_net(obs)
+            ac_distr = distributions.Categorical(logits=logits)
+            return ac_distr
         else:
-            # TODO: define the forward pass for a policy with a continuous action space.
-            pass
-        return None
+            batch_mean = self.mean_net(obs)
+            scale_tril = torch.diag(torch.exp(self.logstd))
+            batch_dim = batch_mean.shape[0]
+            batch_scale_tril = scale_tril.repeat(batch_dim, 1, 1)
+            ac_distr = distributions.MultivariateNormal(
+                batch_mean,
+                scale_tril=batch_scale_tril,
+            )
+            return ac_distr
+
 
     def update(self, obs: np.ndarray, actions: np.ndarray, *args, **kwargs) -> dict:
         """Performs one iteration of gradient descent on the provided batch of data."""
@@ -97,7 +122,13 @@ class MLPPolicyPG(MLPPolicy):
         advantages = ptu.from_numpy(advantages)
 
         # TODO: implement the policy gradient actor update.
-        loss = None
+        ac_dist = self(obs)
+        log_probs = ac_dist.log_prob(actions)
+        loss = -torch.sum(log_probs * advantages)
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
 
         return {
             "Actor Loss": ptu.to_numpy(loss),
